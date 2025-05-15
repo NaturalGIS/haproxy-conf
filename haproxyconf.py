@@ -83,8 +83,17 @@ def main():
 
     ACL.cidr_dir = args.cidrmaps
 
+    fname,fext=os.path.splitext(args.input)
+    
     # Read service map
-    df = pd.read_excel(args.input)
+    match fext:
+        case ".xlsx":
+            df = pd.read_excel(args.input)
+        case ".csv":
+            df = pd.read_csv(args.input,header=0,delimiter='|')
+        case "_":
+            logging.error(f"Unknown file type {fext}")
+            sys.exit(1)
 
     # Load rogue countries
     try:

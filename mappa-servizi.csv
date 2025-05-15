@@ -1,0 +1,8 @@
+Service Type|SNI|Port|Target IP|Target Port|Accept|Reject|user|password
+HTTP|s1.rivetweb.org|443|192.168.244.216|80|IT ES|ALL||
+SSH||2222|shorter.rivetweb.org|22|pastorious.rivetweb.org|ALL||
+SSH||2223|192.168.244.216|22|IT|ALL||
+PGSQL||5432|192.168.244.216|5411|IT|ALL||
+HTTP|s2.rivetweb.org|443|192.168.244.217|80|PT|ALL||
+SSH||2224|192.168.244.217|22|PT|ALL||
+PGSQL||5433|192.168.244.217|5411|PT|ALL||
