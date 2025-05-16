@@ -13,6 +13,8 @@ class Frontend:
 
     def register_acl(self,backend,acl):
         be_name=backend.name()
+        # registering acl to each backend
+        # handled by this frontend
         if be_name not in self.acls:
             self.acls[be_name] = list()
 

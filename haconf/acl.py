@@ -5,12 +5,12 @@ class ACL:
     cidr_dir = "cidr_maps"
 
     def __init__(self,acl_class,acl_val,mode):
-        self.acl_class = acl_class      # either 'accept' or 'reject'
-        self.mode      = mode           # 'tcp' or 'http' or 'https'
-        self.val       = acl_val
-        self.mode      = mode
+        self.acl_class  = acl_class      # either 'accept' or 'reject'
+        self.mode       = mode           # 'tcp' or 'http' or 'https'
+        self.val        = acl_val
+        self.mode       = mode
         self.definition = ''
-        self.acl_name  = ''
+        self.acl_name   = ''
 
         if re.fullmatch(r'[A-Z]{2}',self.val):
             cidr_file = os.path.join(ACL.cidr_dir, f"{self.val}.cidr")
