@@ -19,13 +19,5 @@ options:
   -o, --output OUTPUT   Output HAProxy config file
 ```
 
-## 
-
- * -h,--help: prints the usual usage information
- * -i,--input: .xlsx,.csv input file (default: mappa-servizi.xlsx)
- * -c,--cidrmaps: cidr maps directory
- * -o.--ouput: configuration file output 
-
-
 
 
