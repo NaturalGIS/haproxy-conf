@@ -34,7 +34,6 @@ import logging
 import pandas as pd
 import os
 import argparse
-from haconf import ACL
 
 ### ACL
 
@@ -93,22 +92,55 @@ class Backend:
 
 ### Frontend
 
-class Backend:
-    def __init__(self,idx,bkname,mode,target_ip,target_port):
-        self.idx          = idx
-        self.backend_name = bkname
-        self.mode         = mode
-        self.target_ip    = target_ip
-        self.target_port  = target_port
+class Frontend:
+    def __init__(self,fename,port,mode):
+        self.acl    = dict()
+        self.name   = fename
+        self.port   = port
+        self.mode   = mode
+        self.acls   = dict()
 
-    def name(self):
-        return self.backend_name
+    def register_acl(self,backend,acl):
+        be_name=backend.name()
+        # registering acl to each backend
+        # handled by this frontend
+        if be_name not in self.acls:
+            self.acls[be_name] = list()
+
+        self.acls[be_name].append(acl)
 
     def __str__(self):
-        return '\n'.join([f"backend    {self.backend_name}",
-                          f"    mode   {self.mode}",
-                          f"    server srv{self.idx} {self.target_ip}:{self.target_port} check"])
+        declaration='\n'.join([f"\nfrontend {self.name}",
+                               f"    bind *:{self.port}",
+                               f"    mode {self.mode}\n"])
 
+        #           <declaration>
+        #               acl1
+        #               acl2
+        #               .....
+        #               acln
+        #               backend route <backend1> if <acl names 1>
+        #               acl1
+        #               acl2
+        #               .....
+        #               acln
+        #               backend route <backend2> if <acl names 2>
+
+        be_acls_l = []
+        for be in self.acls:
+            acls = self.acls[be]
+            acl_names = []
+            acl_defs = []
+            for acl_o in acls:
+                print(f"{acl_o.name()} ---> {acl_o}")
+                acl_defs.append(str(acl_o))
+                acl_names.append(acl_o.name())
+            print(f"acl_names {acl_names}")
+            acl_names_txt = ' or '.join(acl_names)
+            acl_defs.append(f"    use backend {be} if {acl_names_txt}")
+            be_acls_l.append('\n'.join(acl_defs))
+
+        return '\n'.join([declaration, *be_acls_l])
 
 # Configure logging
 logging.basicConfig(
@@ -142,6 +174,8 @@ def parse_list_field(field):
     # split on semicolon, comma, or whitespace
     return re.split(r"[;,\s]+", str(field).strip())
 
+
+### main 
 
 def main():
     parser = argparse.ArgumentParser(description='Generate HAProxy config stanzas.')
@@ -180,9 +214,19 @@ def main():
     # Start writing config
     for idx, row in df.iterrows():
         #print(f" -> {idx}: {str(row)}")
-        svc_type = str(row['Service Type']).strip().lower()
-        raw_sni = row.get('SNI')
-        sni = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
+
+        # column 'Status' controls a service that is by default disabled
+        # By putting 'enable' in this column enables the generation of its
+        # configuration stanzas. A service may be therefore disabled and still
+        # in the dataset for documentation or because temporarily disabled
+
+        if (row['Status'] != "enable"):
+            print(f"Service for port {row['Port']} and target IP {row['Target IP']} disabled")
+            continue
+
+        svc_type    = str(row['Service Type']).strip().lower()
+        raw_sni     = row.get('SNI')
+        sni         = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
         
         # se sni = '' questo è un 'falsy' e quindi il nome del
         # servizio viene generato a partire dal tipo di servizio 
@@ -199,7 +243,7 @@ def main():
         fe = register_frontend(svc_type,fe_name,port)
 
         # register backend with the data so far collected
-        be = register_backend(idx,f"bk_{name}_{target_ip}_{target_port}",mode,target_ip,target_port)
+        be = register_backend(idx,f"bk_{name}_{target_ip.replace('.','_')}_{target_port}",mode,target_ip,target_port)
 
         print(f" -> {idx}: {svc_type} - {port}")
 
@@ -218,19 +262,22 @@ def main():
                 acl = ACL("accept",val,mode)
                 fe.register_acl(be,acl)
         elif 'ALL' in accept_list:
+            # Default allow, reject only Reject list
             for val in reject_list:
                 acl = ACL("reject",val,mode)
                 fe.register_acl(be,acl)
 
     with open(args.output, 'w') as fout:
-        print("Backends....")
+        print("Writing backends configuration....")
         for be in backends:
             print("----------------")
+            print(str(be))
             fout.write(str(be)+'\n')
 
-        print("Frontends....")
+        print("Writing frontends configuration....")
         for fe in frontends:
             print("----------------")
+            print(str(fe))
             fout.write(str(frontends[fe])+'\n')
 
 
