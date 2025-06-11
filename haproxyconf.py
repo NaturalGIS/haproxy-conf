@@ -110,9 +110,25 @@ class Frontend:
         self.acls[be_name].append(acl)
 
     def __str__(self):
-        declaration='\n'.join([f"\nfrontend {self.name}",
-                               f"    bind *:{self.port}",
-                               f"    mode {self.mode}\n"])
+
+        decl_l = [f"frontend   {self.name}",
+                  f"    mode   {self.mode}"]
+
+        # let's encrypy challenge
+
+        le_challenge_response = ["    http-request return status 200 content-type text/plain",
+                                 "lf-string \"%[path,field(-1,/)].${ACCOUNT_THUMBPRINT}\\n\"",
+                                 "if { path_beg '/.well-known/acme-challenge/' }"]
+
+
+        if self.port == 443:
+            decl_l.append(f"   bind :443 ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(" ".join(le_challenge_response))
+        else:
+            decl_l.append(f"    bind   *:{self.port}")
+
+
+        declaration='\n'.join(decl_l)
 
         #           <declaration>
         #               acl1
@@ -140,7 +156,8 @@ class Frontend:
             acl_defs.append(f"    use backend {be} if {acl_names_txt}")
             be_acls_l.append('\n'.join(acl_defs))
 
-        return '\n'.join([declaration, *be_acls_l])
+        return '\n'.join(["#    ------ Frontend -----", declaration,
+                          "#    -------- ACLs -------", *be_acls_l])
 
 # Configure logging
 logging.basicConfig(
