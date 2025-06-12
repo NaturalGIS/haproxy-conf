@@ -75,9 +75,12 @@ class ACL:
 ### Backend
 
 class Backend:
-    def __init__(self,idx,bkname,mode,target_ip,target_port):
+    def __init__(self,idx,name,mode,target_ip,target_port):
         self.idx          = idx
-        self.backend_name = bkname
+
+        name = name.replace('.','_')
+        self.backend_name = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}",
+        #self.backend_name = bkname
         self.mode         = mode
         self.target_ip    = target_ip
         self.target_port  = target_port
@@ -166,7 +169,7 @@ logging.basicConfig(
 )
 
 service_types = {'http','pgsql','ssh'}
-backends    = []      # list of registered backends
+backends    = dict()  # list of registered backends
 frontends   = dict()  # dictionary of frontends (port as key)
 rogue_codes = []
 
@@ -180,7 +183,9 @@ def register_frontend (svctype,name,port):
 
 def register_backend (idx,be_name,mode,target_ip,target_port):
     be=Backend(idx,be_name,mode,target_ip,target_port)
-    backends.append(be)
+    be_name = be.name()
+    if (be_name not in backends):
+        backends[be_name] = be
     return be
 
 
@@ -260,7 +265,7 @@ def main():
         fe = register_frontend(svc_type,fe_name,port)
 
         # register backend with the data so far collected
-        be = register_backend(idx,f"bk_{name}_{target_ip.replace('.','_')}_{target_port}",mode,target_ip,target_port)
+        be = register_backend(idx,name,mode,target_ip,target_port)
 
         print(f" -> {idx}: {svc_type} - {port}")
 
