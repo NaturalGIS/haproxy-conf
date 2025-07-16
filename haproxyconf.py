@@ -11,16 +11,17 @@ Description:
      for reverse proxying
 
 Usage:
-    ./haproxyconf.py --input <tabular data> 
-                     --rogue <filename of rogue country codes>
+    ./haproxyconf.py --input    <tabular data> 
+                     --rogue    <filename of rogue country codes>
                      --cidrmaps <cidr maps directory>
-                     --output <output filename>
+                     --output   <output filename>
 
 Dependencies:
     It depends on the Pandas Python library
     
 Notes:
     -
+
 ==============================================================================
 """
 """
@@ -79,7 +80,7 @@ class Backend:
         self.idx          = idx
 
         name = name.replace('.','_')
-        self.backend_name = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}",
+        self.backend_name = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}"
         #self.backend_name = bkname
         self.mode         = mode
         self.target_ip    = target_ip
@@ -97,7 +98,6 @@ class Backend:
 
 class Frontend:
     def __init__(self,fename,port,mode):
-        self.acl    = dict()
         self.name   = fename
         self.port   = port
         self.mode   = mode
@@ -125,10 +125,10 @@ class Frontend:
 
 
         if self.port == 443:
-            decl_l.append(f"   bind :443 ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(f"   bind  :443 ssl crt /etc/haproxy/certs/ strict-sni")
             decl_l.append(" ".join(le_challenge_response))
         else:
-            decl_l.append(f"    bind   *:{self.port}")
+            decl_l.append(f"   bind *:{self.port}")
 
 
         declaration='\n'.join(decl_l)
@@ -149,7 +149,7 @@ class Frontend:
         for be in self.acls:
             acls = self.acls[be]
             acl_names = []
-            acl_defs = []
+            acl_defs  = []
             for acl_o in acls:
                 print(f"{acl_o.name()} ---> {acl_o}")
                 acl_defs.append(str(acl_o))
@@ -165,7 +165,7 @@ class Frontend:
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format = "%(asctime)s - %(levelname)s - %(message)s",
 )
 
 service_types = {'http','pgsql','ssh'}
@@ -174,22 +174,29 @@ frontends   = dict()  # dictionary of frontends (port as key)
 rogue_codes = []
 
 def register_frontend (svctype,name,port):
-    # svctype http, pgsql, ssh
-    mode = 'http' if svctype == 'http' else 'tcp'
-    if (port not in frontends):
-        frontends[port] = Frontend(name,port,mode)
+    mode = svctype
+    service_key = f"{svctype}_{name}_{port}" if name else f"{svctype}_{port}"
 
-    return frontends[port]
+
+    if (service_key not in frontends):
+        frontends[service_key] = Frontend(name,port,mode)
+    else:
+        print(f"Error: frontend {name} (port: {port}, mode: '{mode}') multiple registration")
+
+    return frontends[service_key]
 
 def register_backend (idx,be_name,mode,target_ip,target_port):
     be=Backend(idx,be_name,mode,target_ip,target_port)
     be_name = be.name()
     if (be_name not in backends):
         backends[be_name] = be
+    else:
+        print(f"Warning: backend {be_name} (port: {port}, mode: {mode}, target {target_ipa}) already registered")
+
     return be
 
 
-def parse_list_field(field):
+def parse_list_field (field):
     """ Split Accept/Reject cell into list of entries. """
     if pd.isna(field) or not str(field).strip():
         return []
@@ -242,30 +249,29 @@ def main():
         # configuration stanzas. A service may be therefore disabled and still
         # in the dataset for documentation or because temporarily disabled
 
+        target_ip   = str(row['Target IP']).strip()
+        target_port = str(row['Target Port']).strip()
         if (row['Status'] != "enable"):
-            print(f"Service for port {row['Port']} and target IP {row['Target IP']} disabled")
+            print(f"Service for port {row['Port']} and target IP {target_ip} disabled")
             continue
 
         svc_type    = str(row['Service Type']).strip().lower()
-        raw_sni     = row.get('SNI')
+        raw_sni     = row['SNI'].strip()
         sni         = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
         
         # se sni = '' questo è un 'falsy' e quindi il nome del
         # servizio viene generato a partire dal tipo di servizio 
         # e dalla porta
-        
-        name = sni or f"{svc_type}_{int(row['Port'])}"
-
         port = int(row['Port'])
-        target_ip = str(row['Target IP']).strip()
-        target_port = row['Target Port']
+        
         mode = 'http' if svc_type == 'http' else 'tcp'
 
-        fe_name = f"srv_{svc_type}_{port}"
-        fe = register_frontend(svc_type,fe_name,port)
-
+        be_name = f"{svc_type}_{target_ip}_{target_port}"
         # register backend with the data so far collected
-        be = register_backend(idx,name,mode,target_ip,target_port)
+        be = register_backend(idx,be_name,mode,target_ip,target_port)
+
+        fe_name = sni or f"srv_{svc_type}_{port}"
+        fe = register_frontend(svc_type,fe_name,port)
 
         print(f" -> {idx}: {svc_type} - {port}")
 
@@ -277,7 +283,8 @@ def main():
             sys.exit(1)
 
         # Accept/Reject logic
-        print(f"registering acl for service {fe.name} -> {be.name}")
+
+        print(f"registering acl for service '{fe_name}' -> '{be_name}'")
         if 'ALL' in reject_list:
             # Default reject, allow only Accept list
             for val in accept_list:
@@ -289,17 +296,20 @@ def main():
                 acl = ACL("reject",val,mode)
                 fe.register_acl(be,acl)
 
+    print(backends)
+    print(frontends)
+
     with open(args.output, 'w') as fout:
         print("Writing backends configuration....")
         for be in backends:
             print("----------------")
-            print(str(be))
-            fout.write(str(be)+'\n')
+            print(str(backends[be]))
+            fout.write(str(backends[be])+'\n')
 
         print("Writing frontends configuration....")
         for fe in frontends:
             print("----------------")
-            print(str(fe))
+            #print(str(fe))
             fout.write(str(frontends[fe])+'\n')
 
 
