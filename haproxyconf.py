@@ -77,14 +77,13 @@ class ACL:
 
 class Backend:
     def __init__(self,idx,name,mode,target_ip,target_port):
-        self.idx          = idx
-
+        self.idx            = idx
         name = name.replace('.','_')
-        self.backend_name = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}"
-        #self.backend_name = bkname
-        self.mode         = mode
-        self.target_ip    = target_ip
-        self.target_port  = target_port
+        self.backend_name   = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}"
+        #self.backend_name  = bkname
+        self.mode           = mode
+        self.target_ip      = target_ip
+        self.target_port    = target_port
 
     def name(self):
         return self.backend_name
@@ -125,10 +124,10 @@ class Frontend:
 
 
         if self.port == 443:
-            decl_l.append(f"   bind  :443 ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(f"    bind  :443 ssl crt /etc/haproxy/certs/ strict-sni")
             decl_l.append(" ".join(le_challenge_response))
         else:
-            decl_l.append(f"   bind *:{self.port}")
+            decl_l.append(f"    bind *:{self.port}")
 
 
         declaration='\n'.join(decl_l)
@@ -154,6 +153,7 @@ class Frontend:
                 print(f"{acl_o.name()} ---> {acl_o}")
                 acl_defs.append(str(acl_o))
                 acl_names.append(acl_o.name())
+
             print(f"acl_names {acl_names}")
             acl_names_txt = ' or '.join(acl_names)
             acl_defs.append(f"    use backend {be} if {acl_names_txt}")
@@ -176,8 +176,6 @@ rogue_codes = []
 def register_frontend (svctype,name,port):
     mode = svctype
     service_key = f"{svctype}_{name}_{port}" if name else f"{svctype}_{port}"
-
-
     if (service_key not in frontends):
         frontends[service_key] = Frontend(name,port,mode)
     else:
@@ -242,8 +240,6 @@ def main():
 
     # Start writing config
     for idx, row in df.iterrows():
-        #print(f" -> {idx}: {str(row)}")
-
         # column 'Status' controls a service that is by default disabled
         # By putting 'enable' in this column enables the generation of its
         # configuration stanzas. A service may be therefore disabled and still
@@ -262,16 +258,14 @@ def main():
         # se sni = '' questo è un 'falsy' e quindi il nome del
         # servizio viene generato a partire dal tipo di servizio 
         # e dalla porta
-        port = int(row['Port'])
-        
-        mode = 'http' if svc_type == 'http' else 'tcp'
+        port        = int(row['Port'])
+        fe_name     = f"srv_{svc_type}_{port}"
+        fe          = register_frontend(svc_type,fe_name,port)
 
-        be_name = f"{svc_type}_{target_ip}_{target_port}"
         # register backend with the data so far collected
-        be = register_backend(idx,be_name,mode,target_ip,target_port)
-
-        fe_name = sni or f"srv_{svc_type}_{port}"
-        fe = register_frontend(svc_type,fe_name,port)
+        mode        = 'http' if svc_type == 'http' else 'tcp'
+        be_name     = f"{svc_type}_{target_ip}_{target_port}"
+        be          = register_backend(idx,be_name,mode,target_ip,target_port)
 
         print(f" -> {idx}: {svc_type} - {port}")
 
@@ -309,7 +303,7 @@ def main():
         print("Writing frontends configuration....")
         for fe in frontends:
             print("----------------")
-            #print(str(fe))
+            print(str(frontends[fe]))
             fout.write(str(frontends[fe])+'\n')
 
 
