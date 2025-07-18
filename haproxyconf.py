@@ -45,7 +45,6 @@ class ACL:
         self.acl_class  = acl_class      # either 'accept' or 'reject'
         self.mode       = mode           # 'tcp' or 'http' or 'https'
         self.val        = acl_val
-        self.mode       = mode
         self.definition = ''
         self.acl_name   = ''
 
@@ -59,12 +58,13 @@ class ACL:
             self.definition = f"    acl {acl_name} src {self.val}"
         else:
             safe = self.val.replace('.', '_').replace('-', '_')
-            acl_name = f"acl_{self.acl_class}_sni_{safe}"
+            acl_name = f"acl_{self.acl_class}_dns_{safe}"
             if mode in ['https','http']:
                 self.definition = f"    acl {acl_name} hdr(host) -i {self.val}"
             else:
                 self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val}"
         self.acl_name = acl_name
+
 
     def name(self):
         return self.acl_name
@@ -73,14 +73,20 @@ class ACL:
         return self.definition
 
 
+class SNI(ACL):
+    def __init__(self,acl_class,acl_val,mode):
+
+        super().__init__(acl_class,acl_val,mode)
+        sni = acl_val
+        self.definition = f"    acl {self.acl_name} hdr_beg(host) -i {self.val}"
+
+
 ### Backend
 
 class Backend:
-    def __init__(self,idx,name,mode,target_ip,target_port):
+    def __init__(self,idx,mode,target_ip,target_port):
         self.idx            = idx
-        name = name.replace('.','_')
-        self.backend_name   = f"bk_{name}_{target_ip.replace('.','_')}_{target_port}"
-        #self.backend_name  = bkname
+        self.backend_name   = f"bk_{target_ip.replace('.','_')}_{target_port}"
         self.mode           = mode
         self.target_ip      = target_ip
         self.target_port    = target_port
@@ -96,11 +102,13 @@ class Backend:
 ### Frontend
 
 class Frontend:
-    def __init__(self,fename,port,mode):
-        self.name   = fename
-        self.port   = port
-        self.mode   = mode
+    def __init__(self,port,svc_type):
         self.acls   = dict()
+        self.rules  = dict()
+        self.port   = port
+        self.type   = svc_type
+        self.mode   = 'http' if svc_type == 'http' else 'tcp'
+        self.fename = f"{svc_type}_{port}_{self.mode}"
 
     def register_acl(self,backend,acl):
         be_name=backend.name()
@@ -111,9 +119,11 @@ class Frontend:
 
         self.acls[be_name].append(acl)
 
-    def __str__(self):
+    def name(self):
+        return self.fename
 
-        decl_l = [f"frontend   {self.name}",
+    def __str__(self):
+        decl_l = [f"frontend   {self.fename}",
                   f"    mode   {self.mode}"]
 
         # let's encrypy challenge
@@ -124,7 +134,7 @@ class Frontend:
 
 
         if self.port == 443:
-            decl_l.append(f"    bind  :443 ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(f"    bind *:443 ssl crt /etc/haproxy/certs/ strict-sni")
             decl_l.append(" ".join(le_challenge_response))
         else:
             decl_l.append(f"    bind *:{self.port}")
@@ -173,25 +183,23 @@ backends    = dict()  # list of registered backends
 frontends   = dict()  # dictionary of frontends (port as key)
 rogue_codes = []
 
-def register_frontend (svctype,name,port):
-    mode = svctype
-    service_key = f"{svctype}_{name}_{port}" if name else f"{svctype}_{port}"
+def register_frontend (fe_o):
+    service_key = fe_o.name()
     if (service_key not in frontends):
-        frontends[service_key] = Frontend(name,port,mode)
+        frontends[service_key] = fe_o
     else:
-        print(f"Error: frontend {name} (port: {port}, mode: '{mode}') multiple registration")
+        print(f"Error: multiple registraton of frontend '{service_key}'")
 
-    return frontends[service_key]
+    return frontends[service_key]   
 
-def register_backend (idx,be_name,mode,target_ip,target_port):
-    be=Backend(idx,be_name,mode,target_ip,target_port)
-    be_name = be.name()
+def register_backend (be_o):
+    be_name = be_o.name()
     if (be_name not in backends):
-        backends[be_name] = be
+        backends[be_name] = be_o
     else:
         print(f"Warning: backend {be_name} (port: {port}, mode: {mode}, target {target_ipa}) already registered")
 
-    return be
+    return be_o
 
 
 def parse_list_field (field):
@@ -253,19 +261,19 @@ def main():
 
         svc_type    = str(row['Service Type']).strip().lower()
         raw_sni     = row['SNI'].strip()
-        sni         = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
-        
-        # se sni = '' questo è un 'falsy' e quindi il nome del
-        # servizio viene generato a partire dal tipo di servizio 
-        # e dalla porta
         port        = int(row['Port'])
-        fe_name     = f"srv_{svc_type}_{port}"
-        fe          = register_frontend(svc_type,fe_name,port)
+        fe          = Frontend(port,svc_type)
 
-        # register backend with the data so far collected
+        print(f"registering frontend {fe.name()}")
+
+        fe          = register_frontend(fe)
+
+        sni         = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
+
+        # register backend 
+
         mode        = 'http' if svc_type == 'http' else 'tcp'
-        be_name     = f"{svc_type}_{target_ip}_{target_port}"
-        be          = register_backend(idx,be_name,mode,target_ip,target_port)
+        be          = register_backend(Backend(idx,mode,target_ip,target_port))
 
         print(f" -> {idx}: {svc_type} - {port}")
 
@@ -278,16 +286,25 @@ def main():
 
         # Accept/Reject logic
 
-        print(f"registering acl for service '{fe_name}' -> '{be_name}'")
+        print(f"registering acl for service '{fe.name()}' -> '{be.name()}'")
         if 'ALL' in reject_list:
             # Default reject, allow only Accept list
             for val in accept_list:
                 acl = ACL("accept",val,mode)
                 fe.register_acl(be,acl)
+
+            if sni:
+                acl = SNI("accept",sni,mode)
+                fe.register_acl(be,acl)
+
         elif 'ALL' in accept_list:
             # Default allow, reject only Reject list
             for val in reject_list:
                 acl = ACL("reject",val,mode)
+                fe.register_acl(be,acl)
+
+            if sni:
+                acl = SNI("reject",sni,mode)
                 fe.register_acl(be,acl)
 
     print(backends)
@@ -305,7 +322,6 @@ def main():
             print("----------------")
             print(str(frontends[fe]))
             fout.write(str(frontends[fe])+'\n')
-
 
 if __name__ == "__main__":
     try:
