@@ -197,7 +197,7 @@ def register_backend (be_o):
     if (be_name not in backends):
         backends[be_name] = be_o
     else:
-        print(f"Warning: backend {be_name} (port: {port}, mode: {mode}, target {target_ipa}) already registered")
+        print(f"Warning: backend {be_name} already registered")
 
     return be_o
 
@@ -260,15 +260,18 @@ def main():
             continue
 
         svc_type    = str(row['Service Type']).strip().lower()
-        raw_sni     = row['SNI'].strip()
+        raw_sni     = row['SNI']
+        if not pd.isna(raw_sni):
+            sni     = str(raw_sni).strip()
+        else:
+            sni     = ''
+
         port        = int(row['Port'])
         fe          = Frontend(port,svc_type)
 
         print(f"registering frontend {fe.name()}")
 
         fe          = register_frontend(fe)
-
-        sni         = str(raw_sni).strip() if not pd.isna(raw_sni) else ''
 
         # register backend 
 
@@ -307,20 +310,17 @@ def main():
                 acl = SNI("reject",sni,mode)
                 fe.register_acl(be,acl)
 
-    print(backends)
-    print(frontends)
-
     with open(args.output, 'w') as fout:
         print("Writing backends configuration....")
         for be in backends:
-            print("----------------")
-            print(str(backends[be]))
+            #print("----------------")
+            #print(str(backends[be]))
             fout.write(str(backends[be])+'\n')
 
         print("Writing frontends configuration....")
         for fe in frontends:
-            print("----------------")
-            print(str(frontends[fe]))
+            #print("----------------")
+            #print(str(frontends[fe]))
             fout.write(str(frontends[fe])+'\n')
 
 if __name__ == "__main__":
