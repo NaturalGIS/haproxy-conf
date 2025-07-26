@@ -32,14 +32,6 @@ import os
 import argparse
 import logging
 
-# --- Configuration ---
-# Set the paths to your CSV files.
-BLOCKS_FILE     = "/tmp/GeoLite2-Country-Blocks-IPv4.csv"
-LOCATIONS_FILE  = "/tmp/GeoLite2-Country-Locations-en.csv"
-OUTPUT_DIR      = "cidr_maps/"  # Output directory for $country.cidr files
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -49,17 +41,19 @@ logging.basicConfig(
 ### main 
 
 def main():
+    # --- Configuration ---
+    # Set the paths to your CSV files.
     parser = argparse.ArgumentParser(description='Generate country CIDR maps.')
-    parser.add_argument('-c','--geolite-country-codes', default=BLOCKS_FILE, help='')
-    parser.add_argument('-l','--geolite-country-locations', default=LOCATIONS_FILE, help='')
-    parser.add_argument('-m','--cidrmaps', default=OUTPUT_DIR, help='Directory with country CIDR files')
+    parser.add_argument('-c','--geolite-country-codes', default="/tmp/GeoLite2-Country-Blocks-IPv4.csv", help='')
+    parser.add_argument('-l','--geolite-country-locations', default="/tmp/GeoLite2-Country-Locations-en.csv", help='')
+    parser.add_argument('-m','--cidrmaps', default="cidr_maps/", help='Directory with country CIDR files')
     parser.add_argument('-cl','--country-list', default="ALL", help='Comma separated list of country IDs')
     args = parser.parse_args()
 
     try:
         os.makedirs(args.cidrmaps,exist_ok=False)
     except FileExistsError as fee:
-        logging.error(f"cidr maps destination {args.cidrmaps} exists")
+        logging.info(f"cidr maps destination {args.cidrmaps} exists")
     except FileNotFoundError as fnfe:
         logging.error(f"A parent directory doesn't exist in path {args.cidrmaps}")
         sys.exit(1)
@@ -94,11 +88,12 @@ def main():
     if args.country_list == "ALL":
         networks2generate = country_networks.items()
     else:
-        networks2generate = [cc.upper() for cc in set(args.country_list.split(',')) & \
-                                                  set(country_networks.items())]
+        countries = set([cc.upper() for cc in args.country_list.split(',')]) & \
+                    set(list(country_networks.keys()))
+        networks2generate = {cc: country_networks[cc] for cc in countries if cc in country_networks}
+        networks2generate = networks2generate.items()
 
-
-    for iso_code, networks in networks2generate:
+    for iso_code,networks in networks2generate:
         filename = os.path.join(args.cidrmaps,f"{iso_code}.cidr")
         with open(filename, "w", encoding="utf-8") as outfile:
             for net in networks:

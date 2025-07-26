@@ -65,7 +65,6 @@ class ACL:
                 self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val}"
         self.acl_name = acl_name
 
-
     def name(self):
         return self.acl_name
 
