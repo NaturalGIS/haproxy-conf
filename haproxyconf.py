@@ -47,6 +47,7 @@ class ACL:
         self.val        = acl_val
         self.definition = ''
         self.acl_name   = ''
+        self.snidef     = None
 
         if re.fullmatch(r'[A-Z]{2}',self.val):
             cidr_file = os.path.join(ACL.cidr_dir, f"{self.val}.cidr")
@@ -65,6 +66,9 @@ class ACL:
                 self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val}"
         self.acl_name = acl_name
 
+    def sni(self):
+        return self.snidef
+
     def name(self):
         return self.acl_name
 
@@ -74,11 +78,10 @@ class ACL:
 
 class SNI(ACL):
     def __init__(self,acl_class,acl_val,mode):
-
         super().__init__(acl_class,acl_val,mode)
-        sni = acl_val
-        self.definition = f"    acl {self.acl_name} hdr_beg(host) -i {self.val}"
-
+        self.snidef     = acl_val.strip()
+        self.acl_name   = f"acl_{self.acl_class}_sni_{self.snidef}"
+        self.definition = f"    acl {self.acl_name} hdr_beg(host) -i {self.snidef}"
 
 ### Backend
 
@@ -109,14 +112,26 @@ class Frontend:
         self.mode   = 'http' if svc_type == 'http' else 'tcp'
         self.fename = f"{svc_type}_{port}_{self.mode}"
 
+    #
+    # -- register_acl
+    #
+    # We keep a dictionary mapping a backend to a list of acls
+    #
+
     def register_acl(self,backend,acl):
-        be_name=backend.name()
+
         # registering acl to each backend
         # handled by this frontend
-        if be_name not in self.acls:
-            self.acls[be_name] = list()
 
-        self.acls[be_name].append(acl)
+        be_name = backend.name()
+        if be_name not in self.rules:
+            self.rules[be_name] = list()
+
+        self.rules[be_name].append(acl)
+
+        acl_name = acl.name()
+        if acl_name not in self.acls:
+            self.acls[acl_name] = acl
 
     def name(self):
         return self.fename
@@ -146,30 +161,43 @@ class Frontend:
         #               acl2
         #               .....
         #               acln
-        #               backend route <backend1> if <acl names 1>
-        #               acl1
-        #               acl2
-        #               .....
-        #               acln
-        #               backend route <backend2> if <acl names 2>
+        #               backend route <backend1> if <acl names list 1>
+        #               backend route <backend2> if <acl names list 2>
 
-        be_acls_l = []
-        for be in self.acls:
-            acls = self.acls[be]
-            acl_names = []
-            acl_defs  = []
+        # the acls definition
+
+        acl_definitions_l = [str(acl_o) for acl_name,acl_o in self.acls.items()]
+
+        # the rules definition
+
+        be_rules_l = []
+        for be in self.rules:
+            acls = self.rules[be]
+
+            # we must detect whether there is a sni acl
+
+            sni_acl  = None
+            base_acls = list()
             for acl_o in acls:
-                print(f"{acl_o.name()} ---> {acl_o}")
-                acl_defs.append(str(acl_o))
-                acl_names.append(acl_o.name())
+                if acl_o.sni():
+                    sni_acl = acl_o
+                else:
+                    base_acls.append(acl_o)
 
-            print(f"acl_names {acl_names}")
-            acl_names_txt = ' or '.join(acl_names)
-            acl_defs.append(f"    use backend {be} if {acl_names_txt}")
-            be_acls_l.append('\n'.join(acl_defs))
+            if sni_acl:
+                be_rule_line = f"    use_backend {be} if {sni_acl.name()}"
+                if base_acls:
+                    be_rule_line += " and (" + ' or '.join(acl_o.name() for acl_o in base_acls) + ")"
+
+            else:
+                be_rule_line = f"use_backend {be} if " + ' or '.join(acl_o.name() for acl_o in base_acls)
+
+
+            be_rules_l.append(be_rule_line)
 
         return '\n'.join(["#    ------ Frontend -----", declaration,
-                          "#    -------- ACLs -------", *be_acls_l])
+                          "#    -------- ACLs -------", *acl_definitions_l,
+                                                        *be_rules_l])
 
 # Configure logging
 logging.basicConfig(
@@ -298,6 +326,7 @@ def main():
             if sni:
                 acl = SNI("accept",sni,mode)
                 fe.register_acl(be,acl)
+        
 
         elif 'ALL' in accept_list:
             # Default allow, reject only Reject list
