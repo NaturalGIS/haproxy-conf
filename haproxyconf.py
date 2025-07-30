@@ -58,12 +58,12 @@ class ACL:
             acl_name = f"acl_{self.acl_class}_ip_{safe}"
             self.definition = f"    acl {acl_name} src {self.val}"
         else:
-            safe = self.val.replace('.', '_').replace('-', '_')
+            safe = self.val.lower().replace('.', '_').replace('-', '_')
             acl_name = f"acl_{self.acl_class}_dns_{safe}"
             if mode in ['https','http']:
-                self.definition = f"    acl {acl_name} hdr(host) -i {self.val}"
+                self.definition = f"    acl {acl_name} hdr(host) -i {self.val.lower()}"
             else:
-                self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val}"
+                self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val.lower()}"
         self.acl_name = acl_name
 
 
@@ -109,6 +109,8 @@ class Backend:
 ### Frontend
 
 class Frontend:
+    reject_backend = "bk_reject_all"
+
     def __init__(self,port,svc_type):
         self.acls   = dict()
         self.rules  = dict()
@@ -158,7 +160,6 @@ class Frontend:
         else:
             decl_l.append(f"    bind *:{self.port}")
 
-
         declaration='\n'.join(decl_l)
 
         #           <declaration>
@@ -175,7 +176,7 @@ class Frontend:
 
         # the rules definition
 
-        be_rules_l = []
+        be_rules_l = list()
         for be in self.rules:
             acls = self.rules[be]
 
@@ -190,28 +191,38 @@ class Frontend:
                     base_acls.append(acl_o)
 
             if sni_acl:
-                be_rule_line = f"    use_backend {be} if {sni_acl.name()}"
-                if base_acls:
-                    accept_acls = [acl_o for acl_o in base_acls if acl_o.get_class() == "accept"]
-                    reject_acls = [acl_o for acl_o in base_acls if acl_o.get_class() == "reject"]
-                    if accept_acls:
-                        be_rule_line += " and {" + ' or '.join(acl_o.name() for acl_o in accept_acls) + "}"
-                    if reject_acls:
-                        be_rule_list += " and !{" + ' or '.join(acl_o.name() for acl_o in reject_acls) + "}"
+                be_rule_line_prefix = f"    use_backend {be} if {sni_acl.name()}"
+            else:
+                be_rule_line_prefix = f"    use_backend {be} if "
 
+            if base_acls:
+                accept_acls = [acl_o for acl_o in base_acls if acl_o.get_class().lower() == "accept"]
+                reject_acls = [acl_o for acl_o in base_acls if acl_o.get_class().lower() == "reject"]
+                if accept_acls:
+
+                    # let's add a line for each access rule
+
+                    be_rules_l.append(be_rule_line_prefix + " " + " ".join(acl_o.name() for acl_o in accept_acls))
+
+                elif reject_acls:
+
+                    # let's accept everything unless coming from a specific set of rules
+
+                    be_rules_l.append(be_rule_line_prefix + \
+                                     " unless " + ' || '.join(acl_o.name() for acl_o in reject_acls))
 
             else:
-                be_rule_line = f"    use_backend {be} if " + ' or '.join(acl_o.name() for acl_o in base_acls)
 
+                logging.error(f"Some access criterion must be provided for {be}")
+                sys.exit(1)
 
-            be_rules_l.append(be_rule_line)
 
         fe_body = '\n'.join(["#    ------ Frontend -----", declaration,
-                          "#    -------- ACLs -------", *acl_definitions_l,
-                                                        *be_rules_l])
+                             "#    -------- ACLs -------", *acl_definitions_l,
+                                                           *be_rules_l])
 
         if self.mode == "http":
-            fe_body  += "\n    http-request deny"
+            fe_body  += "\n    default backend " + Frontend.reject_backend
 
         return fe_body
 
