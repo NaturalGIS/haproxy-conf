@@ -202,14 +202,13 @@ class Frontend:
 
                     # let's add a line for each access rule
 
-                    be_rules_l.append(be_rule_line_prefix + " " + " ".join(acl_o.name() for acl_o in accept_acls))
+                    be_rules_l += [be_rule_line_prefix + " " + acl_o.name() for acl_o in accept_acls]
 
                 elif reject_acls:
 
                     # let's accept everything unless coming from a specific set of rules
 
-                    be_rules_l.append(be_rule_line_prefix + \
-                                     " unless " + ' || '.join(acl_o.name() for acl_o in reject_acls))
+                    be_rules_l.append(be_rule_line_prefix + " " + ' '.join(f"!{acl_o.name()}" for acl_o in reject_acls))
 
             else:
 
@@ -222,7 +221,7 @@ class Frontend:
                                                            *be_rules_l])
 
         if self.mode == "http":
-            fe_body  += "\n    default backend " + Frontend.reject_backend
+            fe_body  += "\n    default_backend " + Frontend.reject_backend
 
         return fe_body
 
