@@ -51,15 +51,15 @@ class ACL:
 
         if re.fullmatch(r'[A-Z]{2}',self.val):
             cidr_file = os.path.join(ACL.cidr_dir, f"{self.val}.cidr")
-            acl_name = f"acl_{self.acl_class}_{self.val}"
+            acl_name = f"acl_geo_{self.val}"
             self.definition = f"    acl {acl_name} src -f {cidr_file}"
         elif re.fullmatch(r'\d+\.\d+\.\d+\.\d+',self.val):
             safe = self.val.replace('.','_')
-            acl_name = f"acl_{self.acl_class}_ip_{safe}"
+            acl_name = f"acl_ip_{safe}"
             self.definition = f"    acl {acl_name} src {self.val}"
         else:
             safe = self.val.lower().replace('.', '_').replace('-', '_')
-            acl_name = f"acl_{self.acl_class}_dns_{safe}"
+            acl_name = f"acl_dns_{safe}"
             if mode in ['https','http']:
                 self.definition = f"    acl {acl_name} hdr(host) -i {self.val.lower()}"
             else:
@@ -85,7 +85,7 @@ class SNI(ACL):
         super().__init__(acl_class,acl_val,mode)
         sniname         = acl_val.strip() 
         self.snidef     = sniname.replace('.','_').replace('.','_')
-        self.acl_name   = f"acl_{self.acl_class}_sni_{self.snidef}"
+        self.acl_name   = f"acl_sni_{self.snidef}"
         self.definition = f"    acl {self.acl_name} hdr(host) -i {sniname}"
 
 ### Backend

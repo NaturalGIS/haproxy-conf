@@ -75,7 +75,8 @@ def main():
         for row in reader:
             network = row["network"].strip()  # e.g., "1.0.0.0/24"
             # Prefer the registered country; if missing, use the represented country.
-            geo_id = row.get("registered_country_geoname_id", "").strip() or \
+            geo_id = row.get("geoname_id", "").strip() or \
+                     row.get("registered_country_geoname_id", "").strip() or \
                      row.get("represented_country_geoname_id", "").strip()
             iso_code = locations.get(geo_id)
             if not iso_code:
