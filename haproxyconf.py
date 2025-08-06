@@ -41,34 +41,44 @@ import argparse
 class ACL:
     cidr_dir = "cidr_maps"
 
-    def __init__(self,acl_class,acl_val,mode):
-        self.acl_class  = acl_class.strip().lower() # either 'accept' or 'reject'
+    def __init__(self,acl_val,mode=''):
         self.mode       = mode                      # 'tcp' or 'http' or 'https'
         self.val        = acl_val
         self.definition = ''
         self.acl_name   = ''
         self.snidef     = None
+        self.acl_type   = "generic"
+        self.fetch_method = ""
 
         if re.fullmatch(r'[A-Z]{2}',self.val):
             cidr_file = os.path.join(ACL.cidr_dir, f"{self.val}.cidr")
             acl_name = f"acl_geo_{self.val}"
-            self.definition = f"    acl {acl_name} src -f {cidr_file}"
+            self.fetch_method = f"src -f {cidr_file}" 
+            self.definition = f"    acl {acl_name} {self.fetch_method}"
+            self.acl_type   = "geo"
+
         elif re.fullmatch(r'\d+\.\d+\.\d+\.\d+',self.val):
             safe = self.val.replace('.','_')
             acl_name = f"acl_ip_{safe}"
-            self.definition = f"    acl {acl_name} src {self.val}"
+            self.fetch_method = f"src {self.val}"
+            self.definition   = f"    acl {acl_name} {self.fetch_method}"
+            self.acl_type   = "ip"
         else:
             safe = self.val.lower().replace('.', '_').replace('-', '_')
             acl_name = f"acl_dns_{safe}"
             if mode in ['https','http']:
-                self.definition = f"    acl {acl_name} hdr(host) -i {self.val.lower()}"
+                self.fetch_method = f"hdr(host) -i {self.val.lower()}"
             else:
-                self.definition = f"    acl {acl_name} req.ssl_sni -i {self.val.lower()}"
+                self.fetch_method = f"req.ssl_sni -i {self.val.lower()}"
+
+            self.definition   = f"    acl {acl_name} {self.fetch_method}"
         self.acl_name = acl_name
 
+    def get_type(self):
+        return self.acl_type
 
-    def get_class(self):
-        return self.acl_class
+    def get_method(self):
+        return self.fetch_method
 
     def sni(self):
         return self.snidef
@@ -81,19 +91,23 @@ class ACL:
 
 
 class SNI(ACL):
-    def __init__(self,acl_class,acl_val,mode):
-        super().__init__(acl_class,acl_val,mode)
+    def __init__(self,acl_val,mode):
+        super().__init__(acl_val,mode)
         sniname         = acl_val.strip() 
         self.snidef     = sniname.replace('.','_').replace('.','_')
         self.acl_name   = f"acl_sni_{self.snidef}"
-        self.definition = f"    acl {self.acl_name} hdr(host) -i {sniname}"
+        self.fetch_method = f"hdr(host) -i {sniname}"
+        self.definition   = f"    acl {self.acl_name} {self.fetch_method}"
+        self.acl_type   = "sni"
+
+
 
 ### Backend
 
 class Backend:
     def __init__(self,idx,mode,target_ip,target_port):
         self.idx            = idx
-        self.backend_name   = f"bk_{target_ip.replace('.','_')}_{target_port}"
+        self.backend_name   = f"bk_{target_ip.replace('.','_')}_{target_port}_{idx}"
         self.mode           = mode
         self.target_ip      = target_ip
         self.target_port    = target_port
@@ -125,20 +139,25 @@ class Frontend:
     # We keep a dictionary mapping a backend to a list of acls
     #
 
-    def register_acl(self,backend,acl):
+    def register_acl(self,backend,acl_class,acl):
 
-        # registering acl to each backend
-        # handled by this frontend
+        # registering acl to each backend handled by this frontend
 
         be_name = backend.name()
         if be_name not in self.rules:
-            self.rules[be_name] = list()
+            self.rules.setdefault(be_name,{}).setdefault("accept",list())
+            self.rules.setdefault(be_name,{}).setdefault("reject",list())
+            self.rules.setdefault(be_name,{}).setdefault("sni",None)
 
-        self.rules[be_name].append(acl)
+        if acl_class == "sni":
+            self.rules[be_name]["sni"] = acl
+        else:
+            self.rules[be_name][acl_class].append(acl)
 
         acl_name = acl.name()
         if acl_name not in self.acls:
             self.acls[acl_name] = acl
+
 
     def name(self):
         return self.fename
@@ -182,41 +201,33 @@ class Frontend:
 
             # we must detect whether there is a sni acl
 
-            sni_acl  = None
-            base_acls = list()
-            for acl_o in acls:
-                if acl_o.sni():
-                    sni_acl = acl_o
-                else:
-                    base_acls.append(acl_o)
+            sni_acl = self.rules[be]["sni"]
 
-            if sni_acl:
+            if sni_acl and self.mode == "http":
                 be_rule_line_prefix = f"    use_backend {be} if {sni_acl.name()}"
             else:
                 be_rule_line_prefix = f"    use_backend {be} if "
 
-            if base_acls:
-                accept_acls = [acl_o for acl_o in base_acls if acl_o.get_class().lower() == "accept"]
-                reject_acls = [acl_o for acl_o in base_acls if acl_o.get_class().lower() == "reject"]
-                if accept_acls:
+            #accept_rules_definition = f"    acl_{be}_accept" 
+            reject_composite_acl = None
+            if self.rules[be]["reject"]:
+                if (len(self.rules[be]["reject"]) > 1):
+                    reject_composite_acl = ' '.join(f"!{acl_o.name()}" for acl_o in self.rules[be]["reject"]) 
+                    #be_rules_l.append(f"    {reject_rules_definition} {reject_composite_acl}")
+                else:
+                    reject_composite_acl = self.rules[be]["reject"][0].name()
+                    #be_rules_l.append(f"    {reject_rules_definition} !{reject_composite_acl.name()}")
 
-                    # let's add a line for each access rule
-
-                    be_rules_l += [be_rule_line_prefix + " " + acl_o.name() for acl_o in accept_acls]
-
-                elif reject_acls:
-
-                    # let's accept everything unless coming from a specific set of rules
-
-                    be_rules_l.append(be_rule_line_prefix + " " + ' '.join(f"!{acl_o.name()}" for acl_o in reject_acls))
-
+            if self.rules[be]["accept"]:
+                for acl_o in self.rules[be]["accept"]:
+                    if not reject_composite_acl:
+                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()}")
+                    else:
+                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()} {reject_composite_acl}")
             else:
+                be_rules_l.append(f"{be_rule_line_prefix} {reject_composite_acl}")
 
-                logging.error(f"Some access criterion must be provided for {be}")
-                sys.exit(1)
-
-
-        fe_body = '\n'.join(["#    ------ Frontend -----", declaration,
+        fe_body = '\n'.join(["#    ------ Frontend -----",  declaration,
                              "#    -------- ACLs -------", *acl_definitions_l,
                                                            *be_rules_l])
 
@@ -247,6 +258,7 @@ def register_frontend (fe_o):
 
 def register_backend (be_o):
     be_name = be_o.name()
+    print(f"Register backend {be_name}")
     if (be_name not in backends):
         backends[be_name] = be_o
     else:
@@ -293,11 +305,12 @@ def main():
     try:
         with open(args.rogue) as f:
             for line in f:
-                code = line.strip().upper()
-                if code:
-                    rogue_codes.append(code)
+                line_s = line.strip().upper().split()
+                if line_s:
+                    rogue_codes = [ACL(code) for code in line_s]
     except FileNotFoundError:
         pass
+
 
     # Start writing config
     for idx, row in df.iterrows():
@@ -309,60 +322,65 @@ def main():
         target_ip   = str(row['Target IP']).strip()
         target_port = str(row['Target Port']).strip()
         if (row['Status'] != "enable"):
-            print(f"Service for port {row['Port']} and target IP {target_ip} disabled")
+            logging.warning(f"Service for port {row['Port']} and target IP {target_ip} disabled")
             continue
 
-        svc_type    = str(row['Service Type']).strip().lower()
-        raw_sni     = row['SNI']
+        svc_type = str(row['Service Type']).strip().lower()
+        raw_sni  = row['SNI']
         if not pd.isna(raw_sni):
-            sni     = str(raw_sni).strip()
+            sni  = str(raw_sni).strip()
         else:
-            sni     = ''
+            sni  = ''
 
-        port        = int(row['Port'])
-        fe          = Frontend(port,svc_type)
+        port = int(row['Port'])
+        fe   = Frontend(port,svc_type)
 
         print(f"registering frontend {fe.name()}")
 
-        fe          = register_frontend(fe)
+        fe = register_frontend(fe)
 
         # register backend 
 
-        mode        = 'http' if svc_type == 'http' else 'tcp'
-        be          = register_backend(Backend(idx,mode,target_ip,target_port))
+        mode = 'http' if svc_type == 'http' else 'tcp'
+        be   = register_backend(Backend(idx,mode,target_ip,target_port))
 
         print(f" -> {idx}: {svc_type} - {port}")
 
         accept_list = [x.upper() for x in parse_list_field(row.get('Accept',''))]
         reject_list = [x.upper() for x in parse_list_field(row.get('Reject',''))]
 
-        if ('ALL' in reject_list) and ('ALL' in accept_list):
-            logging.error(f"Inconsistent ACL definition for line {idx}")
-            sys.exit(1)
-
         # Accept/Reject logic
 
         print(f"registering acl for service '{fe.name()}' -> '{be.name()}'")
-        if 'ALL' in reject_list:
-            # Default reject, allow only Accept list
-            for val in accept_list:
-                acl = ACL("accept",val,mode)
-                fe.register_acl(be,acl)
-
-            if sni:
-                acl = SNI("accept",sni,mode)
-                fe.register_acl(be,acl)
         
+        if sni:
+            acl = SNI(sni,mode)
+            fe.register_acl(be,"sni",acl)
 
-        elif 'ALL' in accept_list:
-            # Default allow, reject only Reject list
-            for val in reject_list:
-                acl = ACL("reject",val,mode)
-                fe.register_acl(be,acl)
+        if not accept_list and not reject_list:
+            logging.warning(f"Undefined rules for service {idx}")
+            continue
+        elif (len(accept_list) == 1) and (accept_list[0].upper() == "ALL") and \
+             (len(reject_list) == 1) and (reject_list[0].upper() == "ALL"):
+            logging.error(f"Inconsistent rules definition for service {idx}")
+            sys.exit(1)
+        elif (len(accept_list) == 1) and (accept_list[0].upper() == "ROGUE"):
+            logging.warning(f"Invalid rules definition: accepting rogue countries in service {idx}")
+            continue
 
-            if sni:
-                acl = SNI("reject",sni,mode)
-                fe.register_acl(be,acl)
+        for val in accept_list:
+            acl = ACL(val,mode)
+            fe.register_acl(be,"accept",acl)
+
+        for val in reject_list:
+            if (val.upper() == "ROGUE"):
+                for rcacl in rogue_codes:
+                    fe.register_acl(be,"reject",rcacl)
+            else:
+                acl = ACL(val,mode)
+                fe.register_acl(be,"reject",acl)
+
+
 
     with open(args.output, 'w') as fout:
         print("Writing backends configuration....")
@@ -376,6 +394,10 @@ def main():
             #print("----------------")
             #print(str(frontends[fe]))
             fout.write(str(frontends[fe])+'\n')
+
+        fout.write("\n##### Catch-all backend ########\n")
+        fout.write("\n".join(["backend bk_reject_all","    mode http","    http-request deny"]))
+
 
 if __name__ == "__main__":
     try:
