@@ -101,7 +101,11 @@ class SNI(ACL):
         self.definition   = f"    acl {self.acl_name} {self.fetch_method}"
         self.acl_type   = "sni"
 
-
+class Redir(SNI):
+    def __init__(self,acl_val,mode):
+        super().__init__(acl_val,mode)
+        self.acl_name   = f"acl_redir_sni_{self.snidef}"
+        self.acl_type   = "redir"
 
 ### Backend
 
@@ -120,6 +124,19 @@ class Backend:
         return '\n'.join([f"backend    {self.backend_name}",
                           f"    mode   {self.mode}",
                           f"    server srv{self.idx} {self.target_ip}:{self.target_port} check"])
+
+
+class NullBackend:
+    def __init__(self,idx,sni):
+        self.idx            = idx
+        self.backend_name   = f"null_{sni}_80_{idx}"
+        self.mode           = 'http'
+
+    def name(self):
+        return self.backend_name
+
+    def __str__(self):
+        return ""
 
 ### Frontend
 
@@ -175,7 +192,10 @@ class Frontend:
 
 
         if self.port == 443:
-            decl_l.append(f"    bind *:443 ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(f"    bind *:{self.port} ssl crt /etc/haproxy/certs/ strict-sni")
+            decl_l.append(" ".join(le_challenge_response))
+        elif self.port == 80:
+            decl_l.append(f"    bind *:{self.port}")
             decl_l.append(" ".join(le_challenge_response))
         else:
             decl_l.append(f"    bind *:{self.port}")
@@ -205,28 +225,28 @@ class Frontend:
             sni_acl = self.rules[be]["sni"]
 
             if sni_acl and self.mode == "http":
-                be_rule_line_prefix = f"    use_backend {be} if {sni_acl.name()}"
+                if sni_acl.get_type() == "redir":
+                    be_rule_line_prefix = f"    http-request redirect scheme https if {sni_acl.name()}"
+                else:
+                    be_rule_line_prefix = f"    use_backend {be} if {sni_acl.name()}"
             else:
                 be_rule_line_prefix = f"    use_backend {be} if "
 
-            #accept_rules_definition = f"    acl_{be}_accept" 
-            reject_composite_acl = None
+            reject_composite_acl = ""
             if self.rules[be]["reject"]:
                 if (len(self.rules[be]["reject"]) > 1):
                     reject_composite_acl = ' '.join(f"!{acl_o.name()}" for acl_o in self.rules[be]["reject"]) 
-                    #be_rules_l.append(f"    {reject_rules_definition} {reject_composite_acl}")
                 else:
                     reject_composite_acl = self.rules[be]["reject"][0].name()
-                    #be_rules_l.append(f"    {reject_rules_definition} !{reject_composite_acl.name()}")
 
             if self.rules[be]["accept"]:
                 for acl_o in self.rules[be]["accept"]:
                     if not reject_composite_acl:
-                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()}")
+                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()}".rstrip())
                     else:
-                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()} {reject_composite_acl}")
+                        be_rules_l.append(f"{be_rule_line_prefix} {acl_o.name()} {reject_composite_acl}".rstrip())
             else:
-                be_rules_l.append(f"{be_rule_line_prefix} {reject_composite_acl}")
+                be_rules_l.append(f"{be_rule_line_prefix} {reject_composite_acl}".rstrip())
 
         fe_body = '\n'.join(["#    ------ Frontend -----",  declaration,
                              "#    -------- ACLs -------", *acl_definitions_l,
@@ -253,7 +273,8 @@ def register_frontend (fe_o):
     if (service_key not in frontends):
         frontends[service_key] = fe_o
     else:
-        print(f"Error: multiple registraton of frontend '{service_key}'")
+        pass
+        #print(f"Error: multiple registraton of frontend '{service_key}'")
 
     return frontends[service_key]   
 
@@ -262,10 +283,10 @@ def register_backend (be_o):
     print(f"Register backend {be_name}")
     if (be_name not in backends):
         backends[be_name] = be_o
+        return be_o
     else:
-        print(f"Warning: backend {be_name} already registered")
-
-    return be_o
+        logging.info(f"backend {be_name} already registered")
+        return backends[be_name]
 
 
 def parse_list_field (field):
@@ -343,43 +364,53 @@ def main():
         # register backend 
 
         mode = 'http' if svc_type == 'http' else 'tcp'
-        be   = register_backend(Backend(idx,mode,target_ip,target_port))
+        print(f" -> {idx}: {svc_type} - {port} - {target_ip}")
 
-        print(f" -> {idx}: {svc_type} - {port}")
-
-        accept_list = [x.upper() for x in parse_list_field(row.get('Accept',''))]
-        reject_list = [x.upper() for x in parse_list_field(row.get('Reject',''))]
-
-        # Accept/Reject logic
-
-        print(f"registering acl for service '{fe.name()}' -> '{be.name()}'")
-        
-        if sni:
-            acl = SNI(sni,mode)
-            fe.register_acl(be,"sni",acl)
-
-        if not accept_list and not reject_list:
-            logging.warning(f"Undefined rules for service {idx}")
-            continue
-        elif (len(accept_list) == 1) and (accept_list[0].upper() == "ALL") and \
-             (len(reject_list) == 1) and (reject_list[0].upper() == "ALL"):
-            logging.error(f"Inconsistent rules definition for service {idx}")
-            sys.exit(1)
-        elif (len(accept_list) == 1) and (accept_list[0].upper() == "ROGUE"):
-            logging.warning(f"Invalid rules definition: accepting rogue countries in service {idx}")
-            continue
-
-        for val in accept_list:
-            acl = ACL(val,mode)
-            fe.register_acl(be,"accept",acl)
-
-        for val in reject_list:
-            if (val.upper() == "ROGUE"):
-                for rcacl in rogue_codes:
-                    fe.register_acl(be,"reject",rcacl)
+        if mode == 'http' and port == 80 and target_ip.upper() == 'REDIRECT443':
+            if not sni:
+                logging.error(f"Inconsistent rule: REDIR443 directive requires a SNI definition {idx}")
+                sys.exit(1)
             else:
+                logging.info(f"Register REDIR443 directive for sni '{sni}' {idx}")
+
+            be  = register_backend(NullBackend(idx,sni))
+            acl = Redir(sni,mode)
+            fe.register_acl(be,"sni",acl)
+        else:
+            be  = register_backend(Backend(idx,mode,target_ip,target_port))
+            accept_list = [x.upper() for x in parse_list_field(row.get('Accept',''))]
+            reject_list = [x.upper() for x in parse_list_field(row.get('Reject',''))]
+
+            # Accept/Reject logic
+
+            print(f"registering acl for service '{fe.name()}' -> '{be.name()}'")
+            
+            if sni:
+                acl = SNI(sni,mode)
+                fe.register_acl(be,"sni",acl)
+
+            if not accept_list and not reject_list:
+                logging.warning(f"Undefined rules for service {idx}")
+                continue
+            elif (len(accept_list) == 1) and (accept_list[0].upper() == "ALL") and \
+                 (len(reject_list) == 1) and (reject_list[0].upper() == "ALL"):
+                logging.error(f"Inconsistent rules definition for service {idx}")
+                sys.exit(1)
+            elif (len(accept_list) == 1) and (accept_list[0].upper() == "ROGUE"):
+                logging.warning(f"Invalid rules definition: accepting rogue countries in service {idx}")
+                continue
+
+            for val in accept_list:
                 acl = ACL(val,mode)
-                fe.register_acl(be,"reject",acl)
+                fe.register_acl(be,"accept",acl)
+
+            for val in reject_list:
+                if (val.upper() == "ROGUE"):
+                    for rcacl in rogue_codes:
+                        fe.register_acl(be,"reject",rcacl)
+                else:
+                    acl = ACL(val,mode)
+                    fe.register_acl(be,"reject",acl)
 
 
 
