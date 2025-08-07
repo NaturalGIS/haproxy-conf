@@ -104,7 +104,6 @@ class SNI(ACL):
 class Redir(SNI):
     def __init__(self,acl_val,mode):
         super().__init__(acl_val,mode)
-        self.acl_name   = f"acl_redir_sni_{self.snidef}"
         self.acl_type   = "redir"
 
 ### Backend
