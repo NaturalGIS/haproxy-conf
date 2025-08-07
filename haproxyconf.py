@@ -35,6 +35,7 @@ import logging
 import pandas as pd
 import os
 import argparse
+import datetime
 
 ### ACL
 
@@ -397,6 +398,11 @@ def main():
 
         fout.write("\n##### Catch-all backend ########\n")
         fout.write("\n".join(["backend bk_reject_all","    mode http","    http-request deny"]))
+
+        now = datetime.datetime.now()
+        formatted_datetime = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        fout.write(f"\n\n##### Configuration file generated at {formatted_datetime} ####\n\n")
 
 
 if __name__ == "__main__":
