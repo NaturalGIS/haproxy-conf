@@ -59,29 +59,35 @@ def main():
         sys.exit(1)
     
     # --- Load Locations: Map geoname_id to country ISO code ---
-    locations = {}
-    with open(args.geolite_country_locations, newline='', encoding="utf-8") as loc_file:
-        reader = csv.DictReader(loc_file)
-        for row in reader:
-            geoname_id = row["geoname_id"]
-            iso_code = row.get("country_iso_code", "").strip()
-            if iso_code:
-                locations[geoname_id] = iso_code
+    try:
+        locations = {}
+        with open(args.geolite_country_locations, newline='', encoding="utf-8") as loc_file:
+            reader = csv.DictReader(loc_file)
+            for row in reader:
+                geoname_id = row["geoname_id"]
+                iso_code = row.get("country_iso_code", "").strip()
+                if iso_code:
+                    locations[geoname_id] = iso_code
 
     # --- Process Blocks: Map country ISO code to list of CIDR networks ---
-    country_networks = {}
-    with open(args.geolite_country_codes, newline='', encoding="utf-8") as blocks_file:
-        reader = csv.DictReader(blocks_file)
-        for row in reader:
-            network = row["network"].strip()  # e.g., "1.0.0.0/24"
-            # Prefer the registered country; if missing, use the represented country.
-            geo_id = row.get("registered_country_geoname_id", "").strip() or \
-                     row.get("represented_country_geoname_id", "").strip()
-            iso_code = locations.get(geo_id)
-            if not iso_code:
-                # Could not resolve country code; skip this entry.
-                continue
-            country_networks.setdefault(iso_code,[]).append(network)
+        country_networks = {}
+        with open(args.geolite_country_codes, newline='', encoding="utf-8") as blocks_file:
+            reader = csv.DictReader(blocks_file)
+            for row in reader:
+                network = row["network"].strip()  # e.g., "1.0.0.0/24"
+                # Prefer the registered country; if missing, use the represented country.
+                geo_id = row.get("geoname_id", "").strip() or \
+                         row.get("registered_country_geoname_id", "").strip() or \
+                         row.get("represented_country_geoname_id", "").strip()
+                iso_code = locations.get(geo_id)
+                if not iso_code:
+                    # Could not resolve country code; skip this entry.
+                    continue
+                country_networks.setdefault(iso_code,[]).append(network)
+    except FileNotFoundError as fnfe:
+        logging.error(f"File {args.filename} not found or not readable")
+        logging.error(f"Python error: ´{fnfe.strerror}´")
+        sys.exit(1)
 
     # --- Write out one file per country ---
 
